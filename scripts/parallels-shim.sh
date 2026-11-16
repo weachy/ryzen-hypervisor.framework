@@ -6,7 +6,8 @@
 #   PATCHONLY=1 ./scripts/parallels-shim.sh prepare   # the same for native mode (kext booted with rhv_hv=1): the vendor check is patched and the keyboard armed
 #   sudo ./scripts/parallels-shim.sh install     # prl_vm_app in /Applications becomes a wrapper that starts that copy
 #   sudo ./scripts/parallels-shim.sh uninstall   # puts Parallels' own prl_vm_app back
-#   ./scripts/parallels-shim.sh fix-vms           # turns 3D acceleration off in every stopped VM (it crashes prl_vm_app here)
+#   ./scripts/parallels-shim.sh fix-vms [--keep-3d]  # turns 3D off in every stopped VM (third-party NVIDIA Metal driver only)
+#   ./scripts/parallels-shim.sh 3d-on             # turns 3D back on for every stopped VM (AMD/Apple Metal drivers)
 #   ./scripts/parallels-shim.sh status
 #
 # Why this much: Parallels' dispatcher (a root daemon) starts the VM process, so an environment variable set in a shell
@@ -132,13 +133,34 @@ uninstall)
     fi
     ;;
 fix-vms)
-    # Parallels turns 3D acceleration on for every new VM; on this machine it crashes prl_vm_app inside the Metal driver, and
-    # Windows in a VM does not need it here. Turns it off for every stopped VM (a running one cannot be changed).
+    # The 3D crash is specific to the third-party NVIDIA Metal driver NVMTL on
+    # the author's RTX 3070 (docs/PARALLELS.md). On AMD/Apple Metal drivers 3D
+    # works, so make turning it off optional:
+    #   RHV_KEEP_3D=1 ./scripts/parallels-shim.sh fix-vms
+    #   ./scripts/parallels-shim.sh fix-vms --keep-3d
+    # A running VM cannot be changed; it is skipped.
+    keep3d=0
+    if [ "${RHV_KEEP_3D:-0}" = 1 ] || [ "${2:-}" = "--keep-3d" ]; then keep3d=1; fi
+    command -v prlctl >/dev/null || { echo "prlctl not found" >&2; exit 1; }
+    if [ "$keep3d" -eq 0 ]; then
+        opts="--3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off"
+    else
+        opts="--high-resolution off --high-resolution-in-guest off --vertical-sync off"
+    fi
+    prlctl list -a -o uuid,status 2>/dev/null | tail -n +2 | while read -r uuid status; do
+        [ "$status" = "stopped" ] || { echo "$uuid is $status, skipped"; continue; }
+        prlctl set "$uuid" $opts >/dev/null \
+            && echo "$uuid: display settings applied (keep3d=$keep3d)"
+    done
+    ;;
+3d-on)
+    # Re-enable 3D after a previous fix-vms. 'highest' and 'off' are the valid
+    # values for prlctl; 'on' is rejected with "An invalid value was specified".
     command -v prlctl >/dev/null || { echo "prlctl not found" >&2; exit 1; }
     prlctl list -a -o uuid,status 2>/dev/null | tail -n +2 | while read -r uuid status; do
         [ "$status" = "stopped" ] || { echo "$uuid is $status, skipped"; continue; }
-        prlctl set "$uuid" --3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off >/dev/null \
-            && echo "$uuid: 3D acceleration off"
+        prlctl set "$uuid" --3d-accelerate highest >/dev/null \
+            && echo "$uuid: 3D acceleration highest"
     done
     ;;
 status)
@@ -146,7 +168,7 @@ status)
     else echo "original prl_vm_app in place"; fi
     ;;
 *)
-    echo "usage: $0 prepare|install|uninstall|fix-vms|status" >&2
+    echo "usage: $0 prepare|install|uninstall|fix-vms|3d-on|status" >&2
     exit 2
     ;;
 esac

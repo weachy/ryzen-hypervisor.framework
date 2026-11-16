@@ -21,9 +21,10 @@ xattr -dr com.apple.quarantine .      # if the archive was downloaded with a bro
    **Native mode (new in 0.7, experimental):** `./rhv kext --native` also adds `rhv_hv=1`. Then the kext itself is the hypervisor provider and
    `./rhv docker-desktop` leaves Docker's own files alone (no shim, no wrappers). Read `docs/NATIVE.md` first: it lists what is tested and what is not.
 3. Then whatever you need:
-   - **Docker Desktop (the real one):** `./rhv docker-desktop get` (downloads Docker Desktop 4.97.0 from docker.com and installs it;
-     skip if you already have exactly that build), then `./rhv docker-desktop`, then start Docker as usual (`open -a Docker`).
-     Details: `docs/DOCKER-DESKTOP.md`. Quit Docker Desktop before running it.
+   - **Docker Desktop (the real one):** `./rhv docker-desktop get` (downloads Docker Desktop 4.43.2 / build 199162 from docker.com and installs it;
+     skip if you already have it), then `./rhv docker-desktop`, then start Docker as usual (`open -a Docker`).
+     **4.43.2 is recommended for HyperKit + gRPC-FUSE (bind mounts) + Host networking; 4.97.0's gRPC-FUSE hangs on host bind mounts, see `docs/DOCKER-DESKTOP.md`.** Quit Docker Desktop before running it.
+     Details: `docs/DOCKER-DESKTOP.md`.
    - **A small Docker VM instead (no Docker Desktop):** `./rhv docker up`, then `eval "$(./rhv docker env)"` and `docker run --rm hello-world`.
      It is a small Linux VM (Alpine, 2 vCPUs, 2 GiB) running `dockerd`; images live in `~/.ryzenhv/docker/disk.raw`.
      To reach a container port from the Mac: `./rhv docker up --port 8080`, then `docker run -p 8080:80 nginx` and `http://127.0.0.1:8080`. Stop it with `./rhv docker down`.

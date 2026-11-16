@@ -28,8 +28,13 @@ NVRAM_GUID="7C436110-AB2A-4BBB-A880-FE41995C9F82"
 PB=/usr/libexec/PlistBuddy
 SUPPORTED_PARALLELS_BUILD=57613
 DD_APP="/Applications/Docker.app"
-DD_BUILD=244584
-DD_VERSION=4.97.0
+DD_BUILD=199162
+DD_VERSION=4.43.2
+# 4.43.2 (build 199162) is recommended: HyperKit + gRPC-FUSE (bind mounts) + Host networking.
+# 4.28.0 (build 139021) also works with bind mounts; 4.97.0 (build 244584) hangs on bind mounts (docs/DOCKER-DESKTOP.md).
+DD_BUILD_LEGACY=139021
+DD_VERSION_LEGACY=4.28.0
+DD_BUILDS_SUPPORTED="199162 139021 244584"
 
 # version info written by package.sh: version=, abi=
 rel() { sed -n "s/^$1=//p" "$ROOT/VERSION" 2>/dev/null | head -1; }
@@ -103,9 +108,13 @@ doctor() {
         echo "  [--]   Parallels Desktop is not installed (optional)"
     fi
     if [ -d "$DD_APP" ]; then
-        local ddb; ddb="$(defaults read "$DD_APP/Contents/Info" CFBundleVersion 2>/dev/null)"
-        if [ "$ddb" = "$DD_BUILD" ]; then ok "Docker Desktop $DD_VERSION (build $ddb, supported)$([ -x "$ROOT/libexec/docker-desktop-shim.sh" ] && echo ": $("$ROOT/libexec/docker-desktop-shim.sh" status)")"
-        else warn "Docker Desktop build $ddb: only $DD_VERSION (build $DD_BUILD) is supported; ./rhv docker-desktop get installs it"; fi
+        local ddb ddv; ddb="$(defaults read "$DD_APP/Contents/Info" CFBundleVersion 2>/dev/null)"
+        ddv="$(defaults read "$DD_APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo '?')"
+        if [ "$ddb" = "$DD_BUILD" ]; then
+            ok "Docker Desktop $ddv (build $ddb, recommended)$([ -x "$ROOT/libexec/docker-desktop-shim.sh" ] && echo ": $("$ROOT/libexec/docker-desktop-shim.sh" status)")"
+        else
+            warn "Docker Desktop $ddv (build $ddb): recommended version is $DD_VERSION (build $DD_BUILD) for HyperKit + gRPC-FUSE + Host networking; ./rhv docker-desktop get installs it"
+        fi
     else
         echo "  [--]   Docker Desktop is not installed (optional: ./rhv docker-desktop get)"
     fi
@@ -284,11 +293,18 @@ parallels() {
         "$ROOT/libexec/parallels-shim.sh" prepare || die "prepare failed"
         echo "Replacing prl_vm_app with a wrapper (needs your password; './rhv parallels undo' puts Parallels' own file back)..."
         sudo "$ROOT/libexec/parallels-shim.sh" install || die "install failed"
-        "$ROOT/libexec/parallels-shim.sh" fix-vms || true        # 3D acceleration off in the VMs that exist now
+        if [ "${RHV_KEEP_3D:-0}" = 1 ]; then
+            say "Leaving 3D acceleration untouched (RHV_KEEP_3D=1)."
+        else
+            "$ROOT/libexec/parallels-shim.sh" fix-vms || true    # 3D off: only needed with the third-party NVIDIA Metal driver
+        fi
         cat <<EOF
 
-Done. 3D acceleration was turned off in your existing VMs (it crashes here). Parallels turns it on again in every NEW VM:
+Done. 3D acceleration was turned off in your existing VMs. That is only needed with the third-party NVIDIA Metal
+driver NVMTL; on AMD/Apple Metal drivers it works. Use RHV_KEEP_3D=1 to keep it on, or re-enable it later with
+'./rhv parallels 3d-on'. Parallels turns it on again in every NEW VM:
   ./rhv parallels fix-vms        # run it once after creating a VM, while the VM is stopped
+  ./rhv parallels 3d-on          # re-enable 3D for every stopped VM (AMD/Apple Metal drivers)
 For each VM:
   prlctl set "<VM name>" --cpus 4          (1 to 16 work)
   prlctl list -i "<VM name>" | grep -i hypervisor     # must say apple; otherwise: prlctl set "<VM name>" --hypervisor-type apple
@@ -322,9 +338,10 @@ EOT
         ;;
     check)  echo "The code RyzenHV patches, in the installed Parallels:"; parallels_patchcheck; [ $? -ne 2 ] || die "this bundle has no bin/rhv-patchcheck" ;;
     undo)   sudo "$ROOT/libexec/parallels-shim.sh" uninstall ;;
-    fix-vms) "$ROOT/libexec/parallels-shim.sh" fix-vms ;;
+    fix-vms) "$ROOT/libexec/parallels-shim.sh" fix-vms "${2:-}" ;;
+    3d-on)  "$ROOT/libexec/parallels-shim.sh" 3d-on ;;
     status) "$ROOT/libexec/parallels-shim.sh" status ;;
-    *) die "usage: rhv parallels [setup|native|undo|status|fix-vms]" ;;
+    *) die "usage: rhv parallels [setup|native|check|undo|fix-vms|3d-on|status]" ;;
     esac
 }
 
@@ -445,22 +462,18 @@ docker_desktop() {
         ;;
     setup)
         [ -d "$DD_APP" ] || die "Docker Desktop is not installed. Run: ./rhv docker-desktop get"
-        local b; b="$(defaults read "$DD_APP/Contents/Info" CFBundleVersion 2>/dev/null)"
-        [ "$b" = "$DD_BUILD" ] || die "Docker Desktop build $b is not supported (need $DD_VERSION, build $DD_BUILD). Run: ./rhv docker-desktop get"
+        local b v; b="$(defaults read "$DD_APP/Contents/Info" CFBundleVersion 2>/dev/null)"
+        v="$(defaults read "$DD_APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo '?')"
+        if [ "$b" != "$DD_BUILD" ]; then
+            warn "Docker Desktop $v (build $b) is not the recommended $DD_VERSION (build $DD_BUILD) — continuing anyway (run './rhv docker-desktop get' for $DD_VERSION)"
+        fi
         "$ROOT/bin/rhv-info" >/dev/null 2>&1 || die "the RyzenHV kext does not answer. Run ./rhv doctor"
         pgrep -f "$DD_APP/Contents/MacOS/com.docker.backend" >/dev/null && die "quit Docker Desktop first (menu bar whale > Quit)"
         if "$ROOT/bin/rhv-info" hv 2>/dev/null | grep -q "front end: registered"; then
             say "The kext runs as the hypervisor provider (native): Docker Desktop is used as Docker ships it."
             "$ROOT/libexec/docker-desktop-shim.sh" status 2>/dev/null | grep -q "^installed\|half" && "$ROOT/libexec/docker-desktop-shim.sh" uninstall
-            local st="$HOME/Library/Group Containers/group.com.docker/settings-store.json"
-            mkdir -p "$(dirname "$st")"
-            # plutil cannot write a file that is just '{}' (it takes it for the old OpenStep format), so a missing or empty one is written whole
-            if [ ! -s "$st" ] || [ "$(tr -d ' \t\r\n' < "$st")" = "{}" ]; then
-                printf '{\n  "UseVirtualizationFramework" : false\n}\n' > "$st" || die "cannot write $st"
-            else
-                plutil -replace UseVirtualizationFramework -bool NO "$st" || die "cannot edit $st"
-            fi
-            ok "Docker Desktop is set to use HyperKit (UseVirtualizationFramework=false)"
+            "$ROOT/libexec/docker-desktop-shim.sh" settings || die "cannot write Docker Desktop engine settings"
+            ok "Docker Desktop is set to use HyperKit (version-aware engine settings applied)"
             echo "Start Docker Desktop as usual. The kext fixes HyperKit's two CPU checks in memory when it starts a VM; nothing in Docker.app changes."
             echo "If something is off: rhv-info log | grep 'client fix-ups'"
             return 0

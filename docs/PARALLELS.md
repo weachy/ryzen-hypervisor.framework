@@ -67,12 +67,17 @@ To remove: `sudo ./scripts/parallels-shim.sh uninstall`, then remove the kext fr
 - Windows 11 **Home** runs one physical processor. The shim itself gives the guest the right topology (4 cores in one
   package, cache), so all vCPUs work.
 - `prlctl exec "Windows 11" cmd /c ...` works when Parallels Tools are installed (you can read the event log, the registry).
-- 3D acceleration (`--3d-accelerate`) crashes `prl_vm_app` within seconds on the author's machine (RTX 3070 with the third-party NVIDIA Metal driver NVMTL, nullmoth/nvidia-macos-driver,
+- **3D acceleration is driver-dependent, not a shim limitation.** `--3d-accelerate` crashes `prl_vm_app` within seconds on the author's machine (RTX 3070 with the third-party NVIDIA Metal driver NVMTL, nullmoth/nvidia-macos-driver,
   issue 376 there; not Apple's own driver and not RyzenHV): keep it off with that driver. Cause found (2026-10-30): Parallels draws through its own `AsyncDrawable` class (an `MTLDrawable`).
   Apple's `-[_MTLCommandBuffer presentDrawable:]` (and the `atTime:`, `afterMinimumDuration:` and `options:` variants) first gives the drawable a block through the private
   `addPresentScheduledHandler:`, and `AsyncDrawable.present` calls that block without a nil check. NVMTL's `presentDrawable:` never sets it, so the first `present` reads a NULL block (fault at
   address 0x10, in `nvmtlFinishExecution`). With a stand-in library that calls `addPresentScheduledHandler:` with an empty block before the driver's `present`, a Windows 10 VM with `--3d-accelerate highest`
   ran with the display adapter "Parallels Display Adapter (WDDM)" for minutes with 1600+ presents and no crash. The fix belongs in the NVIDIA driver, not in RyzenHV. On an AMD GPU (a user's RX 6800) 3D works.
+  Verified again in **shim mode** with `--3d-accelerate highest` on an AMD Radeon RX Renoir (Windows 11, Metal/D3D11/D3D12
+  active, no `prl_vm_app` crash in 60 s). `./rhv parallels` calls `fix-vms`, which turns 3D off for every stopped VM as a
+  conservative default. To keep it on: `RHV_KEEP_3D=1 ./rhv parallels`, `./rhv parallels fix-vms --keep-3d`, or re-enable
+  later with `./rhv parallels 3d-on`. Valid values for `prlctl set --3d-accelerate` are `highest` and `off` (`on` is
+  rejected with "An invalid value was specified").
 
 ## What the shim does inside Parallels
 

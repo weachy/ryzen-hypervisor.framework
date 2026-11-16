@@ -23,6 +23,18 @@ HPET and virtio devices itself. That is exactly what the shim implements. A few 
 Both patches find their place by the bytes around it (`shim/rhv_patch.c`, tested by `tests/patch_test.c`), not by an address, and are applied only when the pattern occurs exactly once; if it does not fit, HyperKit is left alone and says so in `~/.ryzenhv/hyperkit.log`. HyperKit is a copy (`com.docker.hyperkit.real`) with its bytes unchanged, ad-hoc signed with the hypervisor entitlement only: the app sandbox of
 Docker's own signature would keep it away from the kext. Docker's original files stay next to it as `.orig` / `.real`.
 
+## Recommended version & bind mounts: use Docker Desktop 4.43.2
+
+**Docker Desktop 4.43.2 (build 199162) is recommended.** It supports **HyperKit + gRPC-FUSE + Host networking** on RyzenHV.
+
+**Docker Desktop 4.97.0 (build 244584) cannot do host bind mounts on this setup.** Reported on a Ryzen 7 7730U / macOS 15.8.2 / RyzenHV 0.7.8 (shim mode): the `grpcfuse` filesystem is mounted at `/host_mnt` inside the Linux VM and `VolumeApprove` succeeds on the host, but every FUSE request times out. Any `-v`, `--mount type=bind`, `:ro`, single-file mount or Compose relative path leaves the container in `Created` with no output; even `docker desktop stop` hangs while unmounting. Containers without host mounts, named volumes and tmpfs mounts all work. Switching the file-sharing implementation (`virtiofs`, `osxfs`), adding shared directories, changing the engine toggle or restarting does not help.
+
+**Version-aware configuration files:**
+- **Docker Desktop < 4.35.0 (build 172550)** reads `~/Library/Group Containers/group.com.docker/settings.json` (camelCase keys, e.g. `useVirtualizationFramework`, `useGrpcfuse`).
+- **Docker Desktop >= 4.35.0 (build 172550)** (including **4.43.2**) reads `~/Library/Group Containers/group.com.docker/settings-store.json` (PascalCase keys, e.g. `UseVirtualizationFramework`, `UseGrpcfuse`).
+
+Both `./rhv docker-desktop` (`./scripts/docker-desktop-shim.sh settings`) and the standalone `rhv-init-apps.sh` script automatically detect the installed Docker Desktop version and update the corresponding settings file.
+
 ## Install
 
 You need the kext running (`docs/RYZENTOSH.md`, boot-args `rhv_enable_svm=1 rhv_allow_users=1 amfi_get_out_of_my_way=0x1`). AMFI has to
@@ -31,7 +43,7 @@ be relaxed because the shim is loaded into signed, hardened Docker binaries.
 From the release bundle:
 
 ```bash
-./rhv docker-desktop get      # downloads Docker Desktop 4.97.0 (630 MB) from docker.com and copies it to /Applications (skip if you have it)
+./rhv docker-desktop get      # downloads Docker Desktop 4.43.2 (build 199162) from docker.com and copies it to /Applications (skip if you have it)
 ./rhv docker-desktop          # patches HyperKit, wraps HyperKit and the backend, selects the HyperKit engine in the settings
 open -a Docker                # first start: Docker may ask for your password to install its network helper
 docker run --rm hello-world

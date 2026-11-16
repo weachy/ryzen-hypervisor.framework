@@ -136,6 +136,20 @@ patches the CPU-vendor check. What is missing, in the order it is worth doing:
 
 19. [ ] **HyperKit sometimes aborts in `vcpu_thread`** (SIGABRT, seen once in about six Docker starts on 2026-10-31 and once on 2026-10-30 on an older build, same code offset in both crash reports; the other starts ran `hello-world` and `alpine`). Docker Desktop reports "hyperkit: process terminated unexpectedly ... signal code 6"; starting it again works. Not analysed yet (the abort comes from HyperKit itself; its message is not in the Docker logs).
 
+20. [ ] **Docker Desktop 4.97.0: gRPC-FUSE host mounts hang.** Reported (Ryzen 7 7730U, macOS 15.8.2, shim mode):
+    `grpcfuse /host_mnt` is mounted in the Linux VM and `VolumeApprove` succeeds on the host, but FUSE requests never
+    get an answer — every `-v` / `--mount` leaves the container in `Created` and `docker desktop stop` hangs too.
+    Containers without host mounts, named volumes and tmpfs are fine. 4.43.2 (build 199162, recommended for HyperKit + gRPC-FUSE + Host networking) and 4.28.0 (build 139021) work with the same shim.
+    To check: whether it also happens in native mode (one inconclusive old log suggests it may), which HyperKit/vsock
+    change between the builds is responsible, and whether a 4.97.0 setting can be made to work.
+21. [x] **Cross-version Docker Desktop support (4.43.2 recommended)**: `get` installs 4.43.2 (build 199162), with version-aware engine settings (`settings.json` for `< 4.35.0`, `settings-store.json` for `>= 4.35.0`). The two in-memory HyperKit patches are found by their surrounding bytes and apply across these builds.
+22. [ ] **Add a timeout-protected bind-mount smoke test** to `./rhv doctor` / CI: `scripts/rhv-smoke-bind-mount.sh`
+    catches the silent hang above instead of leaving users with a stalled `docker run`. Include Compose and a restart
+    cycle in the test matrix; the current Docker Desktop test list has no bind mount at all.
+23. [ ] **3D acceleration opt-out done, GPU detection open.** `fix-vms` now accepts `RHV_KEEP_3D=1` / `--keep-3d` and
+    `./rhv parallels 3d-on` re-enables 3D. Automatically deciding from the Metal driver (NVMTL vs AMD/Apple) would
+    remove the manual step; needs reports from more GPU/driver combinations.
+
 ## Risks
 
 - The first kernel crashes are unavoidable. Debugging: serial/netdump from a second machine, or at least a fallback OpenCore entry.

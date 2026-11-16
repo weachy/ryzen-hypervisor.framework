@@ -13,7 +13,8 @@ so the unmodified apps run.
 
 | software | state |
 |---|---|
-| **Docker Desktop 4.97.0** (the Intel build) | works with Docker's own, unmodified files: engine, `docker run`, builds, 16 vCPUs |
+| **Docker Desktop 4.43.2** (build 199162, Intel build — **recommended**) | works with **HyperKit + gRPC-FUSE (bind mounts) + Host networking**, `docker run`, builds, 16 vCPUs |
+| **Docker Desktop 4.97.0** (build 244584, Intel build) | works with Docker's own, unmodified files: engine, `docker run`, builds, 16 vCPUs, sleep/wake. **Host bind mounts hang** (see `docs/DOCKER-DESKTOP.md`) |
 | **Parallels Desktop 26.5.0** (build 57613 tested; other builds are tried if their code matches, see below) | **Windows 10 works**: 1–4 vCPUs, keyboard, network, shared folders, Parallels Tools, suspend and resume. A boot takes about 20 seconds. Windows 11 worked in the older (shim) mode |
 | **VirtualBox 7.x** | experimental: version 7.2.22 runs a Windows 10 installation onto a disk (reported by a user, a second report would help). VirtualBox 6.x does **not** work (see below) |
 | **VMware Fusion 26** | **not working yet**: with 0.7.5 the BIOS and its SMM entry work and Windows starts, but the installer stops at the Windows boot logo |
@@ -47,12 +48,32 @@ You need **SVM Mode switched on in the BIOS**. Nothing has to be compiled: no Xc
    ./rhv autostart install
    ```
 6. Then whatever you use:
-   - **Docker Desktop:** `./rhv docker-desktop get` (downloads exactly version 4.97.0 from docker.com; skip it if you have that build), quit Docker if it runs, then
+   - **Docker Desktop:** `./rhv docker-desktop get` (downloads the recommended version 4.43.2 / build 199162 from docker.com; skip it if you have it), quit Docker if it runs, then
      `./rhv docker-desktop`, then start Docker as usual.
    - **Parallels Desktop:** `./rhv parallels native`. To undo: `./rhv parallels undo`.
    - **VirtualBox 7.x:** nothing to install, it uses the kext by itself.
 
 There is also a small app, **RyzenHV**, with buttons for the same steps (kext, automatic start, Parallels, Docker); download it from the same Releases page.
+
+## One-Click App Initializer (`rhv-init-apps.sh`)
+
+For **pure shim mode** (EFI has `RyzenHV.kext` and `boot-args` contains `rhv_enable_svm=1 rhv_allow_users=1 amfi_get_out_of_my_way=0x1`, without `rhv_hv=1`), [`rhv-init-apps.sh`](rhv-init-apps.sh) provides a standalone, one-click application-layer setup with zero dependency on `libexec/*.sh` or `./rhv`:
+
+- Patches Docker Desktop (`HyperKit` + `com.docker.backend`) and automatically updates `settings.json` (`< 4.35.0`) or `settings-store.json` (`>= 4.35.0`) to use HyperKit + gRPC-FUSE and disable auto-updates.
+- Patches Parallels Desktop (`prl_vm_app` wrapper + private copy) and keeps VM 3D acceleration at `highest` (works on AMD GPUs; pass `--keep-3d-off` if using NVMTL).
+- Includes `--check` (read-only diagnostics), `--install-docker` (auto-installs recommended Docker Desktop **4.43.2 / build 199162**), `--smoke-test` (bidirectional bind-mount verification), and `--undo` (restore original files).
+
+**Run directly online** (no need to clone the repository; just have the unpacked `ryzenhv-*` release bundle in `~/Downloads/` or pass `--rhv-dir`):
+
+```bash
+# Read-only diagnostic check first
+bash <(curl -fsSL https://raw.githubusercontent.com/weachy/ryzen-hypervisor.framework/main/rhv-init-apps.sh) --check
+
+# One-click initialization (auto-stops VMs/Docker, installs Docker 4.43.2 if needed, runs bind-mount smoke test)
+bash <(curl -fsSL https://raw.githubusercontent.com/weachy/ryzen-hypervisor.framework/main/rhv-init-apps.sh) --yes --stop-vms --stop-docker --install-docker --smoke-test
+```
+
+> Use `bash <(curl ...)` rather than `curl ... | bash` so `sudo` and interactive prompts keep access to your terminal TTY. Pass `--rhv-dir /path/to/ryzenhv-*` if your release bundle is not in `~/Downloads/`.
 
 ## Creating virtual machines the right way
 
@@ -65,8 +86,7 @@ There is also a small app, **RyzenHV**, with buttons for the same steps (kext, a
    prlctl set "My Windows" --cpus 4
    prlctl set "My Windows" --3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off
    ```
-   The hypervisor type must be **Apple**. 1 to 4 vCPUs were tested. Parallels switches 3D acceleration on again in every **new** VM and it crashes here, so run
-   `./rhv parallels fix-vms` (or the button in the app) after you create each VM.
+   The hypervisor type must be **Apple**. 1 to 4 vCPUs were tested. Parallels switches 3D acceleration on in every **new** VM; it crashes only with the third-party NVIDIA Metal driver NVMTL (on AMD/Apple Metal drivers 3D works). `./rhv parallels fix-vms` turns 3D off by default; pass `RHV_KEEP_3D=1 ./rhv parallels`, `./rhv parallels fix-vms --keep-3d`, or `./rhv parallels 3d-on` to keep/re-enable it (and `rhv-init-apps.sh` keeps 3D at `highest` by default).
 3. **Do not hard-stop the VM** (kill, "Stop" with force) during the installation or the first start. Windows may land in "Why did my PC restart?" and automatic repair.
 4. Install **Parallels Tools** in the guest: they give you shared folders, the clipboard and `prlctl exec`.
 5. Give the VM only the memory it needs (4–8 GB is plenty). The kext keeps the guest's memory in RAM while the VM runs.
@@ -89,9 +109,9 @@ There is also a small app, **RyzenHV**, with buttons for the same steps (kext, a
 
 ### Docker Desktop
 
-- Only the **Intel build 4.97.0** is supported; `./rhv docker-desktop get` installs it. Turn off automatic updates in Docker's settings; after an update run
-  `./rhv docker-desktop` again.
-- Quit Docker Desktop before running `./rhv docker-desktop`. The step also switches Docker to its HyperKit engine (not "Virtualization framework"); that is on purpose.
+- **Recommended version: 4.43.2 (build 199162)** — supports **HyperKit + gRPC-FUSE (bind mounts) + Host networking**. `./rhv docker-desktop get` (or `rhv-init-apps.sh --install-docker`) installs it. Turn off automatic updates in Docker's settings; after an update run `./rhv docker-desktop` (or `rhv-init-apps.sh`) again.
+- Docker Desktop **4.97.0 (build 244584)** hangs on host bind mounts under gRPC-FUSE (`docs/DOCKER-DESKTOP.md`).
+- Quit Docker Desktop before running `./rhv docker-desktop`. The step also switches Docker to its HyperKit engine (not "Virtualization framework"), using `settings.json` (`< 4.35.0`) or `settings-store.json` (`>= 4.35.0`).
 - If Docker does not start after a restart of the Mac, delete the leftover file `~/Library/Containers/com.docker.docker/Data/vms/0/hyperkit.pid` and start it again.
 
 ### For every VM

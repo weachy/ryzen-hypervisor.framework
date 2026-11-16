@@ -5,6 +5,7 @@
 #
 #   ./scripts/docker-desktop-shim.sh install      # patches HyperKit in /Applications/Docker.app, wraps HyperKit and the backend
 #   ./scripts/docker-desktop-shim.sh uninstall    # puts Docker's own files back
+#   ./scripts/docker-desktop-shim.sh settings     # writes engine/file-sharing settings (<4.35.0: settings.json, >=4.35.0: settings-store.json)
 #   ./scripts/docker-desktop-shim.sh status
 #
 # What it does to /Applications/Docker.app/Contents (nothing needs sudo if you own the app, which is the default):
@@ -15,7 +16,8 @@
 #   MacOS/com.docker.backend.real            Docker's backend, moved (its signature stays valid)
 #   MacOS/com.docker.backend                 a wrapper that starts it with the shim loaded: the backend refuses to start unless
 #                                            hv_vm_create() works
-#   ~/Library/Group Containers/group.com.docker/settings-store.json   UseVirtualizationFramework=false (use HyperKit)
+#   ~/Library/Group Containers/group.com.docker/settings-store.json   UseVirtualizationFramework=false (>= 4.35.0 / build 172550)
+#   ~/Library/Group Containers/group.com.docker/settings.json         useVirtualizationFramework=false (< 4.35.0 / build 172550)
 # Two checks in HyperKit (v0.20210107-12-gadc4ea) are patched in memory by the shim, found by the bytes around them:
 #   1. HyperKit refuses a CPU whose CPUID vendor is not "GenuineIntel": that conditional jump becomes nops.
 #   2. HyperKit compares the guest linear address of an EPT violation with the one it computes from the instruction; AMD does
@@ -36,10 +38,72 @@ BACK_REAL="$BACK.real"
 OWNER="$(id -un)"
 OWNER_HOME="$(eval echo "~$OWNER")"
 LIBDIR="$OWNER_HOME/.ryzenhv/lib"
-SETTINGS="$OWNER_HOME/Library/Group Containers/group.com.docker/settings-store.json"
+SETTINGS_DIR="$OWNER_HOME/Library/Group Containers/group.com.docker"
+SETTINGS="$SETTINGS_DIR/settings-store.json"
+SETTINGS_LEGACY="$SETTINGS_DIR/settings.json"
 
 is_script() { [ -e "$1" ] && head -c 2 "$1" | grep -q '#!'; }
 bytes_at() { od -An -tx1 -j "$2" -N "$3" "$1" | tr -d ' \n'; }
+
+ver_ge() {
+    local a b i va vb
+    IFS='.' read -ra a <<< "${1%%[^0-9.]*}"
+    IFS='.' read -ra b <<< "${2%%[^0-9.]*}"
+    for ((i=0; i<3; i++)); do
+        va="${a[i]:-0}"; vb="${b[i]:-0}"
+        va="${va:-0}"; vb="${vb:-0}"
+        if [ "$va" -gt "$vb" ] 2>/dev/null; then return 0; fi
+        if [ "$va" -lt "$vb" ] 2>/dev/null; then return 1; fi
+    done
+    return 0
+}
+
+docker_uses_settings_store() {
+    local dv="" db=""
+    if [ -d "$APP" ]; then
+        dv="$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo '')"
+        db="$(defaults read "$APP/Contents/Info" CFBundleVersion 2>/dev/null || echo '')"
+    fi
+    if [ -n "$dv" ] && [[ "$dv" =~ ^[0-9]+(\.[0-9]+)* ]]; then
+        ver_ge "$dv" "4.35.0"; return $?
+    fi
+    if [ -n "$db" ] && [[ "$db" =~ ^[0-9]+$ ]]; then
+        [ "$db" -ge 172550 ]; return $?
+    fi
+    return 0
+}
+
+# Docker Desktop < 4.35.0 (build 172550) reads settings.json (camelCase keys);
+# >= 4.35.0 reads settings-store.json (PascalCase keys).
+settings() {
+    mkdir -p "$SETTINGS_DIR"
+    if docker_uses_settings_store; then
+        # plutil cannot write a file that is just '{}' (it takes it for the old OpenStep format)
+        if [ ! -s "$SETTINGS" ] || [ "$(tr -d ' \t\r\n' < "$SETTINGS")" = "{}" ]; then
+            printf '{\n  "UseVirtualizationFramework" : false\n}\n' > "$SETTINGS" || return 1
+        else
+            plutil -replace UseVirtualizationFramework -bool NO "$SETTINGS" || return 1
+        fi
+        plutil -replace UseVirtualizationFrameworkVirtioFS -bool NO "$SETTINGS" || return 1
+        plutil -replace UseGrpcfuse -bool YES "$SETTINGS" || return 1
+        plutil -replace DisableUpdate -bool YES "$SETTINGS" || return 1
+        plutil -replace AutoDownloadUpdates -bool NO "$SETTINGS" || return 1
+        plutil -replace AcceptCanaryUpdates -bool NO "$SETTINGS" || return 1
+        echo "engine settings: HyperKit + gRPC-FUSE (settings-store.json)"
+    else
+        if [ ! -s "$SETTINGS_LEGACY" ] || [ "$(tr -d ' \t\r\n' < "$SETTINGS_LEGACY")" = "{}" ]; then
+            printf '%s\n' '{"settingsVersion":35,"filesharingDirectories":["/Users","/Volumes","/private","/tmp","/var/folders"]}' > "$SETTINGS_LEGACY" || return 1
+        fi
+        plutil -replace useVirtualizationFramework -bool NO "$SETTINGS_LEGACY" || return 1
+        plutil -replace useVirtualizationFrameworkVirtioFS -bool NO "$SETTINGS_LEGACY" || return 1
+        plutil -replace useGrpcfuse -bool YES "$SETTINGS_LEGACY" || return 1
+        plutil -replace filesharingDirectories -json '["/Users","/Volumes","/private","/tmp","/var/folders"]' "$SETTINGS_LEGACY" || return 1
+        plutil -replace disableUpdate -bool YES "$SETTINGS_LEGACY" || return 1
+        plutil -replace autoDownloadUpdates -bool NO "$SETTINGS_LEGACY" || return 1
+        plutil -replace acceptCanaryUpdates -bool NO "$SETTINGS_LEGACY" || return 1
+        echo "engine settings: HyperKit + gRPC-FUSE (settings.json)"
+    fi
+}
 
 case "${1:-status}" in
 install)
@@ -101,13 +165,7 @@ WRAP
     chmod 755 "$BACK"
 
     # --- settings: HyperKit instead of Apple's Virtualization framework
-    mkdir -p "$(dirname "$SETTINGS")"
-    # plutil cannot write a file that is just '{}' (it takes it for the old OpenStep format), so a missing or empty one is written whole
-    if [ ! -s "$SETTINGS" ] || [ "$(tr -d ' \t\r\n' < "$SETTINGS")" = "{}" ]; then
-        printf '{\n  "UseVirtualizationFramework" : false\n}\n' > "$SETTINGS"
-    else
-        plutil -replace UseVirtualizationFramework -bool NO "$SETTINGS"
-    fi
+    settings || { echo "cannot write Docker Desktop engine settings" >&2; exit 1; }
     echo "installed: Docker Desktop in $APP now runs HyperKit through the shim"
     echo "start it as usual (Launchpad, Dock, open -a Docker)"
     ;;
@@ -123,13 +181,16 @@ uninstall)
     fi
     echo "restored Docker's own HyperKit and backend (the UseVirtualizationFramework setting is left as it is)"
     ;;
+settings)
+    settings
+    ;;
 status)
     if is_script "$WRAP" && is_script "$BACK"; then echo "installed (HyperKit and backend wrapped)"
     elif is_script "$WRAP" || is_script "$BACK"; then echo "half installed: run install again"
     else echo "Docker's own files in place"; fi
     ;;
 *)
-    echo "usage: $0 install|uninstall|status" >&2
+    echo "usage: $0 install|uninstall|status|settings" >&2
     exit 2
     ;;
 esac
