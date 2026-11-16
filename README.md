@@ -69,8 +69,8 @@ For **pure shim mode** (EFI has `RyzenHV.kext` and `boot-args` contains `rhv_ena
 # Read-only diagnostic check first
 bash <(curl -fsSL https://raw.githubusercontent.com/weachy/ryzen-hypervisor.framework/main/rhv-init-apps.sh) --check
 
-# One-click initialization (auto-stops VMs/Docker, installs Docker 4.43.2 if needed, runs bind-mount smoke test)
-bash <(curl -fsSL https://raw.githubusercontent.com/weachy/ryzen-hypervisor.framework/main/rhv-init-apps.sh) --yes --stop-vms --stop-docker --install-docker --smoke-test
+# One-click initialization (auto-stops VMs/Docker, installs Docker 4.43.2 if needed)
+bash <(curl -fsSL https://raw.githubusercontent.com/weachy/ryzen-hypervisor.framework/main/rhv-init-apps.sh) --stop-vms --stop-docker --install-docker
 ```
 
 > Use `bash <(curl ...)` rather than `curl ... | bash` so `sudo` and interactive prompts keep access to your terminal TTY. Pass `--rhv-dir /path/to/ryzenhv-*` if your release bundle is not in `~/Downloads/`.

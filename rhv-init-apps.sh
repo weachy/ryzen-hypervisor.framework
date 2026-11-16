@@ -752,7 +752,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   fi
   say "  Read-only check complete; no files were modified."
   [ "$CHECK_FAILS" -gt 0 ] && warn "Found $CHECK_FAILS issue(s); see warnings above" || ok "All checks passed; ready to initialize"
-  say "  Run: \"$0\" --yes --stop-vms --stop-docker [--install-docker]"
+  say "  Run: \"$0\" --stop-vms --stop-docker [--install-docker]"
   exit 0
 fi
 
