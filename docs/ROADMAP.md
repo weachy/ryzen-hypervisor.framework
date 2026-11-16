@@ -146,9 +146,7 @@ patches the CPU-vendor check. What is missing, in the order it is worth doing:
 22. [ ] **Add a timeout-protected bind-mount smoke test** to `./rhv doctor` / CI: `scripts/rhv-smoke-bind-mount.sh`
     catches the silent hang above instead of leaving users with a stalled `docker run`. Include Compose and a restart
     cycle in the test matrix; the current Docker Desktop test list has no bind mount at all.
-23. [ ] **3D acceleration opt-out done, GPU detection open.** `fix-vms` now accepts `RHV_KEEP_3D=1` / `--keep-3d` and
-    `./rhv parallels 3d-on` re-enables 3D. Automatically deciding from the Metal driver (NVMTL vs AMD/Apple) would
-    remove the manual step; needs reports from more GPU/driver combinations.
+23. [x] **3D acceleration GPU auto-detection & opt-out.** `fix-vms` and `rhv-init-apps.sh` auto-detect the GPU/Metal driver: NVIDIA (`NVMTL`) turns 3D off, while AMD (Vega iGPU / AMD dGPU) sets 3D to `highest` (`RHV_KEEP_3D=1` / `--keep-3d` / `--keep-3d-off` and `./rhv parallels 3d-on` remain available for manual override).
 
 ## Risks
 

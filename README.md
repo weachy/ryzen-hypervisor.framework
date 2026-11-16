@@ -60,7 +60,7 @@ There is also a small app, **RyzenHV**, with buttons for the same steps (kext, a
 For **pure shim mode** (EFI has `RyzenHV.kext` and `boot-args` contains `rhv_enable_svm=1 rhv_allow_users=1 amfi_get_out_of_my_way=0x1`, without `rhv_hv=1`), [`rhv-init-apps.sh`](rhv-init-apps.sh) provides a standalone, one-click application-layer setup with zero dependency on `libexec/*.sh` or `./rhv`:
 
 - Patches Docker Desktop (`HyperKit` + `com.docker.backend`) and automatically updates `settings.json` (`< 4.35.0`) or `settings-store.json` (`>= 4.35.0`) to use HyperKit + gRPC-FUSE and disable auto-updates.
-- Patches Parallels Desktop (`prl_vm_app` wrapper + private copy) and keeps VM 3D acceleration at `highest` (works on AMD GPUs; pass `--keep-3d-off` if using NVMTL).
+- Patches Parallels Desktop (`prl_vm_app` wrapper + private copy) and auto-detects the GPU vendor for 3D acceleration (`highest` on AMD Vega iGPU / AMD dGPU, `off` on NVIDIA `NVMTL`; pass `--keep-3d-off` to force off).
 - Includes `--check` (read-only diagnostics), `--install-docker` (auto-installs recommended Docker Desktop **4.43.2 / build 199162**), `--smoke-test` (bidirectional bind-mount verification), and `--undo` (restore original files).
 
 **Run directly online** (no need to clone the repository; just have the unpacked `ryzenhv-*` release bundle in `~/Downloads/` or pass `--rhv-dir`):
@@ -86,7 +86,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/weachy/ryzen-hypervisor.fram
    prlctl set "My Windows" --cpus 4
    prlctl set "My Windows" --3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off
    ```
-   The hypervisor type must be **Apple**. 1 to 4 vCPUs were tested. Parallels switches 3D acceleration on in every **new** VM; it crashes only with the third-party NVIDIA Metal driver NVMTL (on AMD/Apple Metal drivers 3D works). `./rhv parallels fix-vms` turns 3D off by default; pass `RHV_KEEP_3D=1 ./rhv parallels`, `./rhv parallels fix-vms --keep-3d`, or `./rhv parallels 3d-on` to keep/re-enable it (and `rhv-init-apps.sh` keeps 3D at `highest` by default).
+   The hypervisor type must be **Apple**. 1 to 4 vCPUs were tested. Parallels switches 3D acceleration on in every **new** VM; it crashes only with the third-party NVIDIA Metal driver NVMTL (on AMD/Apple Metal drivers 3D works). `./rhv parallels fix-vms` and `rhv-init-apps.sh` auto-detect the GPU vendor (turning 3D off on NVIDIA `NVMTL` and setting `highest` on AMD GPUs); pass `RHV_KEEP_3D=1 ./rhv parallels`, `./rhv parallels fix-vms --keep-3d`, `./rhv parallels 3d-on`, or `--keep-3d-off` to override manually.
 3. **Do not hard-stop the VM** (kill, "Stop" with force) during the installation or the first start. Windows may land in "Why did my PC restart?" and automatic repair.
 4. Install **Parallels Tools** in the guest: they give you shared folders, the clipboard and `prlctl exec`.
 5. Give the VM only the memory it needs (4–8 GB is plenty). The kext keeps the guest's memory in RAM while the VM runs.

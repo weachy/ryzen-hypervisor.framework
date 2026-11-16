@@ -16,7 +16,7 @@
 #      - >= 4.35.0 (build 172550): modifies settings-store.json (PascalCase keys)
 #      Configures HyperKit + gRPC-FUSE + disables automatic updates.
 #   4. Built-in Parallels Desktop shim installation & management (private farm copy + prl_vm_app wrapper).
-#   5. Keeps VM 3D acceleration at highest by default (works on AMD GPUs; does not force-disable 3D).
+#   5. Auto-detects GPU vendor for Parallels 3D acceleration (highest on AMD Vega iGPU / AMD dGPU, off on NVIDIA NVMTL).
 #   6. Built-in system diagnostics (replaces ./rhv doctor without version false positives or QEMU checks).
 #   7. Optional startup verification & bidirectional bind-mount smoke test (--smoke-test / --verify).
 #   8. Supports --undo to restore original Docker Desktop and Parallels Desktop files.
@@ -139,6 +139,18 @@ docker_uses_settings_store() {
     return $?
   fi
   return 0
+}
+
+# Detect GPU vendor for Parallels 3D acceleration (nvidia -> off, amd -> highest)
+detect_gpu_vendor() {
+  local sp ks
+  sp="$(system_profiler SPDisplaysDataType 2>/dev/null || true)"
+  if grep -qiE "NVIDIA|0x10de" <<<"$sp"; then echo "nvidia"; return 0; fi
+  if grep -qiE "AMD|Radeon|0x1002" <<<"$sp"; then echo "amd"; return 0; fi
+  ks="$(kextstat 2>/dev/null || true)"
+  if grep -qiE "NVMTL|NVIDIA|GeForce" <<<"$ks"; then echo "nvidia"; return 0; fi
+  if grep -qiE "AMDRadeon|AMDFramebuffer|NootedRed" <<<"$ks"; then echo "amd"; return 0; fi
+  echo "unknown"
 }
 
 # JSON helpers: prefer python3, fall back to macOS plutil
@@ -886,24 +898,37 @@ else
 fi
 
 # ---------------------------------------------------------------- 8. VM 3D acceleration & PD preferences
+GPU_VENDOR="unknown"
+TARGET_3D="highest"
 if [ "$SKIP_PD" -eq 0 ]; then
   step "8/9  VM 3D acceleration & Parallels auto-update settings"
+  GPU_VENDOR="$(detect_gpu_vendor)"
   if [ "$KEEP_3D_OFF" -eq 1 ]; then
-    warn "Keeping 3D acceleration off (--keep-3d-off)"
+    TARGET_3D="off"
+    warn "Disabling 3D acceleration (--keep-3d-off)"
+  elif [ "$GPU_VENDOR" = "nvidia" ]; then
+    TARGET_3D="off"
+    warn "NVIDIA GPU / NVMTL driver detected: disabling Parallels 3D acceleration to avoid prl_vm_app crashes"
+  elif [ "$GPU_VENDOR" = "amd" ]; then
+    TARGET_3D="highest"
+    ok "AMD GPU detected: enabling Parallels 3D acceleration (highest)"
   else
-    N=0
-    while read -r uuid status; do
-      [ -z "$uuid" ] && continue
-      [ "$status" = "stopped" ] || { warn "$uuid is $status; skipping 3D setting"; continue; }
-      prlctl set "$uuid" --3d-accelerate highest >/dev/null 2>&1 \
-        || die "Failed to enable 3D acceleration for VM $uuid"
-      VMI="$(prlctl list -i "$uuid" 2>/dev/null)"
-      [[ "$VMI" == *"3d-acceleration=highest"* ]] \
-        || die "Failed to verify 3d-acceleration=highest for VM $uuid"
-      N=$((N+1)); ok "VM $uuid: 3d-acceleration=highest (supported on AMD GPU)"
-    done < <(prlctl list -a -o uuid,status 2>/dev/null | tail -n +2)
-    [ "$N" -gt 0 ] || warn "No stopped VMs found; re-run this script after creating VMs to enable 3D"
+    TARGET_3D="highest"
+    warn "Could not determine GPU vendor; defaulting Parallels 3D acceleration to highest (pass --keep-3d-off if using NVMTL)"
   fi
+
+  N=0
+  while read -r uuid status; do
+    [ -z "$uuid" ] && continue
+    [ "$status" = "stopped" ] || { warn "$uuid is $status; skipping 3D setting"; continue; }
+    prlctl set "$uuid" --3d-accelerate "$TARGET_3D" >/dev/null 2>&1 \
+      || die "Failed to set 3D acceleration ($TARGET_3D) for VM $uuid"
+    VMI="$(prlctl list -i "$uuid" 2>/dev/null)"
+    [[ "$VMI" == *"3d-acceleration=$TARGET_3D"* ]] \
+      || die "Failed to verify 3d-acceleration=$TARGET_3D for VM $uuid"
+    N=$((N+1)); ok "VM $uuid: 3d-acceleration=$TARGET_3D"
+  done < <(prlctl list -a -o uuid,status 2>/dev/null | tail -n +2)
+  [ "$N" -gt 0 ] || warn "No stopped VMs found; re-run this script after creating VMs to apply 3D settings"
 
   set_pd_pref() {
     local key="$1" want="$2" cur typ
@@ -941,9 +966,12 @@ if [ "$SKIP_PD" -eq 1 ]; then
 elif [ "$KEEP_3D_OFF" -eq 1 ]; then
   PD_LINE="$(defaults read "/Applications/Parallels Desktop.app/Contents/Info" CFBundleVersion 2>/dev/null || echo '?'), standalone shim"
   D3_LINE="off (--keep-3d-off)"
+elif [ "$TARGET_3D" = "off" ]; then
+  PD_LINE="$(defaults read "/Applications/Parallels Desktop.app/Contents/Info" CFBundleVersion 2>/dev/null || echo '?'), standalone shim"
+  D3_LINE="off (NVIDIA/NVMTL detected)"
 else
   PD_LINE="$(defaults read "/Applications/Parallels Desktop.app/Contents/Info" CFBundleVersion 2>/dev/null || echo '?'), standalone shim"
-  D3_LINE="highest (AMD GPU optimized)"
+  D3_LINE="highest (GPU: $GPU_VENDOR)"
 fi
 if [ "$SKIP_DOCKER" -eq 1 ]; then
   DD_LINE="not installed or skipped"

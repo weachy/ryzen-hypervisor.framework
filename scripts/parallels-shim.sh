@@ -134,23 +134,39 @@ uninstall)
     ;;
 fix-vms)
     # The 3D crash is specific to the third-party NVIDIA Metal driver NVMTL on
-    # the author's RTX 3070 (docs/PARALLELS.md). On AMD/Apple Metal drivers 3D
-    # works, so make turning it off optional:
-    #   RHV_KEEP_3D=1 ./scripts/parallels-shim.sh fix-vms
-    #   ./scripts/parallels-shim.sh fix-vms --keep-3d
-    # A running VM cannot be changed; it is skipped.
+    # NVIDIA GPUs (docs/PARALLELS.md). On AMD iGPU (Vega) / AMD dGPU, 3D works.
+    # Auto-detect the GPU vendor unless RHV_KEEP_3D=1 or --keep-3d is passed.
+    detect_gpu_vendor() {
+        local sp ks
+        sp="$(system_profiler SPDisplaysDataType 2>/dev/null || true)"
+        if grep -qiE "NVIDIA|0x10de" <<<"$sp"; then echo "nvidia"; return 0; fi
+        if grep -qiE "AMD|Radeon|0x1002" <<<"$sp"; then echo "amd"; return 0; fi
+        ks="$(kextstat 2>/dev/null || true)"
+        if grep -qiE "NVMTL|NVIDIA|GeForce" <<<"$ks"; then echo "nvidia"; return 0; fi
+        if grep -qiE "AMDRadeon|AMDFramebuffer|NootedRed" <<<"$ks"; then echo "amd"; return 0; fi
+        echo "unknown"
+    }
     keep3d=0
     if [ "${RHV_KEEP_3D:-0}" = 1 ] || [ "${2:-}" = "--keep-3d" ]; then keep3d=1; fi
     command -v prlctl >/dev/null || { echo "prlctl not found" >&2; exit 1; }
-    if [ "$keep3d" -eq 0 ]; then
-        opts="--3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off"
-    else
+    gpu_vendor="$(detect_gpu_vendor)"
+    if [ "$keep3d" -eq 1 ]; then
         opts="--high-resolution off --high-resolution-in-guest off --vertical-sync off"
+        mode_msg="keep3d=1"
+    elif [ "$gpu_vendor" = "amd" ]; then
+        opts="--3d-accelerate highest --high-resolution off --high-resolution-in-guest off --vertical-sync off"
+        mode_msg="gpu=amd, 3d=highest"
+    elif [ "$gpu_vendor" = "nvidia" ]; then
+        opts="--3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off"
+        mode_msg="gpu=nvidia, 3d=off"
+    else
+        opts="--3d-accelerate off --high-resolution off --high-resolution-in-guest off --vertical-sync off"
+        mode_msg="gpu=unknown, 3d=off (conservative default)"
     fi
     prlctl list -a -o uuid,status 2>/dev/null | tail -n +2 | while read -r uuid status; do
         [ "$status" = "stopped" ] || { echo "$uuid is $status, skipped"; continue; }
         prlctl set "$uuid" $opts >/dev/null \
-            && echo "$uuid: display settings applied (keep3d=$keep3d)"
+            && echo "$uuid: display settings applied ($mode_msg)"
     done
     ;;
 3d-on)
